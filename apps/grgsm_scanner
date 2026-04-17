@@ -25,6 +25,7 @@ import gc
 import json
 import math
 import os
+import struct
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, asdict
 from math import pi
@@ -46,6 +47,18 @@ CCCH_CONFS = {
     4: '3 CCCH, not combined',
     6: '4 CCCH, not combined',
 }
+
+
+def group_gsmtap_packets_by_arfcn(packets):
+    messages_by_arfcn = {}
+    for packet in packets:
+        packet = bytes.fromhex(packet)
+        if len(packet) < 6:
+            continue
+        _, hdr_len, _, _, arfcn = struct.unpack(">BBBBH", packet[:6])
+        message = packet[4 * hdr_len:]
+        messages_by_arfcn.setdefault(arfcn, set()).add(message.hex())
+    return messages_by_arfcn
 
 
 @contextmanager
@@ -489,12 +502,14 @@ class wideband_scanner(gr.top_block):
         self.wideband_receiver = wideband_receiver(OSR=4, fc=carrier_frequency, samp_rate=sample_rate)
         self.extract_immediate_assignment = gsm.extract_immediate_assignment(False, True, True)
         self.gsm_extract_system_info = gsm.extract_system_info()
+        self.gsmtap_sink = gsm.message_sink()
 
         self.connect((self.rtlsdr_source, 0), (self.head, 0))
         self.connect((self.head, 0), (self.blocks_rotator_cc, 0))
         self.connect((self.blocks_rotator_cc, 0), (self.wideband_receiver, 0))
         self.msg_connect(self.wideband_receiver, 'msgs', self.gsm_extract_system_info, 'msgs')
         self.msg_connect(self.wideband_receiver, 'msgs', self.extract_immediate_assignment, 'msgs')
+        self.msg_connect(self.wideband_receiver, 'msgs', self.gsmtap_sink, 'in')
 
     def set_carrier_frequency(self, carrier_frequency):
         self.carrier_frequency = carrier_frequency
@@ -529,6 +544,7 @@ class ChannelInfo:
     power: int
     neighbours: list
     cell_arfcns: list
+    gsmtap_messages: list
     assignments: list
     ncc: int
     bcc: int
@@ -596,11 +612,14 @@ def scan_freq(current_freq, channels_num, samp_rate, speed, ppm, gain, args, col
         assignment_channels = numpy.array(scanner.extract_immediate_assignment.get_channel_types())
         cell_arfcn_lists = []
         neighbour_lists = []
+        gsmtap_messages_lists = []
         nccs = []
         bccs = []
+        messages = group_gsmtap_packets_by_arfcn(scanner.gsmtap_sink.get_messages())
         for i in range(0, len(chans)):
             cell_arfcn_lists.append(scanner.gsm_extract_system_info.get_cell_arfcns(chans[i]))
             neighbour_lists.append(scanner.gsm_extract_system_info.get_neighbours(chans[i]))
+            gsmtap_messages_lists.append(list(messages[chans[i]]))
             nccs.append(scanner.wideband_receiver.receivers_with_decoders[chans[i]].gsm_receiver_0.get_ncc())
             bccs.append(scanner.wideband_receiver.receivers_with_decoders[chans[i]].gsm_receiver_0.get_bcc())
         scanner = None
@@ -671,8 +690,8 @@ def scan_freq(current_freq, channels_num, samp_rate, speed, ppm, gain, args, col
 
             info = ChannelInfo(
                 found_arfcn, float(found_freqs[i]), int(cell_ids[i]), int(lacs[i]), str(mccs[i]), f'{mncs[i]:02}',
-                int(ccch_confs[i]), int(powers[i]), neighbour_list, cell_arfcn_list, found_arfcn_assignments, nccs[i],
-                bccs[i]
+                int(ccch_confs[i]), int(powers[i]), neighbour_list, cell_arfcn_list, gsmtap_messages_lists[i],
+                found_arfcn_assignments, nccs[i], bccs[i]
             )
 
             print(info)
