@@ -27,17 +27,14 @@ import math
 import os
 import struct
 from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from math import pi
 
 import click
 import gnuradio.gsm.arfcn as arfcn
 import numpy
 import osmosdr
-from gnuradio import blocks
-from gnuradio import gr
-from gnuradio import gsm
-from gnuradio import network
+from gnuradio import blocks, gr, gsm, network
 from gnuradio.filter import pfb
 
 CCCH_CONFS = {
